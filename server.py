@@ -1,178 +1,172 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 import os
 import uuid
 import json
-import shutil
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional
 
 app = FastAPI(title="PDF Processor API", version="1.0")
 
-# CORS
+# CORS per permettere richieste dal frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In produzione, sostituire con URL specifico
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Directory
-UPLOAD_FOLDER = Path("uploads")
-PROCESSED_FOLDER = Path("processed")
-UPLOAD_FOLDER.mkdir(exist_ok=True)
-PROCESSED_FOLDER.mkdir(exist_ok=True)
+# Simuliamo una "database" in memoria
+processes_db = {}
 
-# Cache processi
-processes: Dict[str, Dict] = {}
-
-# Endpoint base
 @app.get("/")
 async def root():
     return {
-        "message": "PDF Processor API v1.0",
-        "status": "online",
-        "endpoints": ["/health", "/upload", "/status/{id}", "/download/{id}"]
+        "message": "✅ PDF Processor API is running!",
+        "version": "1.0",
+        "endpoints": {
+            "health": "/health",
+            "upload": "POST /upload",
+            "status": "GET /status/{id}",
+            "info": "GET /info"
+        }
     }
 
 @app.get("/health")
-async def health():
+async def health_check():
+    """Endpoint per verificare che il server sia online"""
     return {
-        "status": "healthy", 
-        "service": "pdf-processor",
-        "timestamp": datetime.now().isoformat()
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "pdf-processor-backend"
+    }
+
+@app.get("/info")
+async def get_info():
+    """Informazioni sul server"""
+    return {
+        "service": "PDF Processor Backend",
+        "description": "Processa PDF: traduce PL→IT e rimuove prezzi",
+        "status": "operational",
+        "processes_count": len(processes_db)
     }
 
 @app.post("/upload")
 async def upload_pdf(
-    pdf: UploadFile = File(...),
-    config: Optional[str] = None
+    pdf: UploadFile = File(..., description="Il file PDF da processare"),
+    config: str = None
 ):
     """
-    Endpoint per caricare e processare PDF
+    Riceve un PDF e restituisce un ID processo.
+    In questa versione demo, simula il processamento.
     """
     try:
-        # Genera ID univoco
+        # Genera ID univoco per questo processo
         process_id = str(uuid.uuid4())
         
-        # Salva file originale
-        input_path = UPLOAD_FOLDER / f"{process_id}_input.pdf"
-        with open(input_path, "wb") as f:
-            shutil.copyfileobj(pdf.file, f)
+        # Leggi il file (solo per dimostrazione)
+        contents = await pdf.read()
+        file_size_kb = len(contents) / 1024
         
-        # Simula elaborazione (per test)
-        # In produzione qui andrebbe la vera logica di processamento
-        output_path = PROCESSED_FOLDER / f"{process_id}_output.pdf"
-        
-        # Per ora copiamo il file (simulazione)
-        shutil.copy(input_path, output_path)
-        
-        # Calcola statistiche (simulate)
-        import random
-        stats = {
-            "pages": random.randint(1, 10),
-            "translations": random.randint(5, 20),
-            "prices_removed": random.randint(3, 15),
-            "processing_time": 2.5,
-            "file_size_kb": os.path.getsize(output_path) / 1024
+        # Configurazione
+        config_dict = json.loads(config) if config else {
+            "translate": True,
+            "remove_prices": True,
+            "remove_header": True,
+            "remove_ref": True
         }
         
-        # Salva info processo
-        processes[process_id] = {
-            "id": process_id,
-            "status": "completed",
-            "message": "PDF elaborato con successo",
-            "progress": 100,
+        # Simula statistiche di processamento
+        import random
+        stats = {
             "original_filename": pdf.filename,
-            "input_size": os.path.getsize(input_path),
-            "output_file": str(output_path),
-            "download_url": f"/download/{process_id}",
+            "file_size_kb": round(file_size_kb, 2),
+            "pages": random.randint(1, 20),
+            "translations_applied": random.randint(5, 25),
+            "prices_removed": random.randint(3, 15),
+            "processing_time_seconds": random.uniform(1.5, 4.0),
+            "status": "completed",
+            "config_used": config_dict
+        }
+        
+        # Salva nel "database"
+        processes_db[process_id] = {
+            "id": process_id,
             "created_at": datetime.now().isoformat(),
-            "stats": stats
+            "status": "completed",
+            "stats": stats,
+            "download_available": False,  # In demo, non creiamo file reali
+            "message": "PDF elaborato con successo (demo mode)"
         }
         
         return JSONResponse({
+            "success": True,
             "process_id": process_id,
-            "status": "completed",
-            "message": "PDF caricato e processato",
-            "download_url": f"/download/{process_id}",
-            "stats": stats
+            "message": "PDF ricevuto. Processamento simulato in modalità demo.",
+            "stats": stats,
+            "note": "Questa è una versione demo. In produzione, qui verrebbe creato il PDF modificato.",
+            "next_steps": [
+                f"Controlla stato: GET /status/{process_id}",
+                "In produzione: qui verrebbe generato il download link"
+            ]
         })
         
     except Exception as e:
         raise HTTPException(
-            status_code=500, 
-            detail=f"Errore durante l'elaborazione: {str(e)}"
+            status_code=500,
+            detail=f"Errore durante l'upload: {str(e)}"
         )
 
 @app.get("/status/{process_id}")
-async def get_status(process_id: str):
-    """Ottieni stato di un processo"""
-    if process_id not in processes:
-        raise HTTPException(status_code=404, detail="Processo non trovato")
+async def get_process_status(process_id: str):
+    """Restituisce lo stato di un processo specifico"""
+    if process_id not in processes_db:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Processo {process_id} non trovato"
+        )
     
-    return JSONResponse(processes[process_id])
-
-@app.get("/download/{process_id}")
-async def download_pdf(process_id: str):
-    """Scarica PDF processato"""
-    if process_id not in processes:
-        raise HTTPException(status_code=404, detail="Processo non trovato")
-    
-    process = processes[process_id]
-    output_file = process.get("output_file")
-    
-    if not output_file or not os.path.exists(output_file):
-        raise HTTPException(status_code=404, detail="File non trovato")
-    
-    filename = f"MODIFICATO_{process['original_filename']}"
-    return FileResponse(
-        path=output_file,
-        filename=filename,
-        media_type='application/pdf'
-    )
+    return JSONResponse(processes_db[process_id])
 
 @app.get("/processes")
-async def list_processes():
+async def list_all_processes():
     """Lista tutti i processi"""
     return {
-        "count": len(processes),
-        "processes": list(processes.keys())
+        "total": len(processes_db),
+        "processes": [
+            {
+                "id": pid,
+                "created_at": data["created_at"],
+                "status": data["status"]
+            }
+            for pid, data in processes_db.items()
+        ]
     }
 
-@app.delete("/cleanup/{process_id}")
-async def cleanup_process(process_id: str):
-    """Pulisci file di un processo"""
-    if process_id in processes:
-        process = processes[process_id]
-        
-        # Rimuovi file
-        for file_key in ["input_file", "output_file"]:
-            if file_key in process:
-                file_path = process[file_key]
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-        
-        # Rimuovi dalla cache
-        del processes[process_id]
-        
-        return {"message": f"Processo {process_id} rimosso"}
-    
-    raise HTTPException(status_code=404, detail="Processo non trovato")
+@app.delete("/cleanup")
+async def cleanup_all():
+    """Pulisce tutti i processi (per testing)"""
+    global processes_db
+    count = len(processes_db)
+    processes_db = {}
+    return {
+        "message": f"Puliti {count} processi",
+        "remaining": 0
+    }
 
-# Server startup
+# Avvio server
 if __name__ == "__main__":
     import uvicorn
     
-    # Ottieni porta da variabile d'ambiente (Railway usa PORT)
+    # Porta: usa variabile d'ambiente o default 8000
     port = int(os.environ.get("PORT", 8000))
     
-    print(f"🚀 Starting PDF Processor API on port {port}")
-    print(f"📁 Upload folder: {UPLOAD_FOLDER.absolute()}")
-    print(f"📁 Processed folder: {PROCESSED_FOLDER.absolute()}")
+    print("=" * 50)
+    print("🚀 PDF PROCESSOR BACKEND - DEMO VERSION")
+    print(f"📡 Porta: {port}")
+    print(f"🌐 Accesso: http://0.0.0.0:{port}")
+    print("=" * 50)
     
     uvicorn.run(
         app,
